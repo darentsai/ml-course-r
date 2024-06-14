@@ -1,0 +1,308 @@
+---
+title: "Statistical and Machine Learning"
+subtitle: "Lab5: Support Vector Machine (SVM) and Support Vector Regression (SVR)"
+author: "Tsai, Dai-Rong"
+format:
+  revealjs:
+    theme: default
+    echo: true
+    smaller: true
+    scrollable: true
+    slide-number: true
+    auto-stretch: false
+    history: false
+    pdf-max-pages-per-slide: 5
+    embed-resources: true
+    preview-links: true
+tbl-cap-location: bottom
+---
+
+## Dataset
+
+```{r echo = FALSE}
+options(digits = 5, width = 100, max.print = 100)
+```
+
+```{css echo = FALSE}
+.reveal table, ul ul li{
+  font-size: smaller;
+}
+```
+
+> ***Glass Identification Dataset***
+
+```{r}
+# Set random seed
+set.seed(1234)
+
+# Packages
+library(e1071) # for svm, tune
+
+# Data
+data(Glass, package = "mlbench")
+```
+
+- Response
+    - `Type`: Type of glass (1, 2, 3, 5, 6, 7)
+- Predictors (Unit: weight percent in corresponding oxide)
+    - `RI`: Refractive Index
+    - `Na`: Sodium
+    - `Mg`: Magnesium
+    - `Al`: Aluminum
+    - `Si`: Silicon
+    - `K`: Potassium
+    - `Ca`: Calcium
+    - `Ba`: Barium
+    - `Fe`: Iron
+
+---
+
+::: {.panel-tabset}
+
+### Preview
+
+```{r}
+dim(Glass)
+head(Glass)
+proportions(table(Glass$Type)) * 100
+```
+
+### Data Structure
+
+```{r}
+str(Glass)
+```
+
+:::
+
+## Create Training/Testing Partitions
+
+- Split data into 80% training set and 20% test set
+
+```{r}
+nr <- nrow(Glass)
+train.id <- sample(nr, nr * 0.8)
+
+training <- Glass[train.id, ]
+testing <- Glass[-train.id, ]
+```
+
+- Check dimension
+
+```{r}
+dim(training)
+dim(testing)
+```
+
+## Support Vector Machine (SVM)
+
+`svm()` in R `e1071` package is based on `C`/`C++` code of [`LIBSVM`](https://www.csie.ntu.edu.tw/~cjlin/libsvm/) developed by Chih-Chung Chang and [Chih-Jen Lin](https://www.csie.ntu.edu.tw/~cjlin/index.html).
+
+```{r}
+svm.mod <- svm(Type ~ ., data = training, probability = TRUE)
+```
+
+::: {.callout-tip}
+
+### Arguments
+
+- `type`
+    - `"C-classification"`: **default** when `y` is a factor.
+    - `"eps-regression"`: **default** when `y` is numeric.
+    - `"nu-classification"`: [^1] allows for more control over the number of support vectors by specifying an additional parameter $\nu$ which approximates the fraction of support vectors.
+    - `"nu-regression"` <sup>1</sup>
+    - `"one-classification"`:[^2] one-class classification for outlier/novelty detection.
+- `cost`: (default: 1) cost of constraints violation. It's the $C$-constant of the regularization term in the Lagrange formulation.
+- `epsilon`: (default: 0.1) $\epsilon$ in the $\epsilon$-insensitive loss function for `"eps-regression"` mode.
+- `kernel`
+
+| kernel | formula | parameters |
+|--------|--------|--------|
+| `"linear"` | $\pmb{u}^T \pmb{v}$ | |
+| `"polynomial"` | $(\gamma \pmb{u}^T \pmb{v} + c_0)^d$ | $\gamma$(`gamma`), $d$(`degree`), $c_0$(`coef0`) |
+| `"radial"` (**default**) | $exp\{ -\gamma |\pmb{u} - \pmb{v}|^2 \}$ | $\gamma$(`gamma`) |
+| `"sigmoid"` | $tanh\{ \gamma \pmb{u}^T \pmb{v} + c_0 \}$ | $\gamma$(`gamma`), $c_0$(`coef0`) |
+
+- `probability`: (**default**: `FALSE`) logical indicating whether the model should allow for probability predictions.
+- `scale`: (**default**: `TRUE`) A logical vector indicating the variables to be scaled. The center and scale values are returned and used for later predictions.
+
+:::
+
+[^1]: B. Schölkopf, A. Smola, R. Williamson, and P. L. Bartlett. **New support vector algorithms**. *Neural Computation*, 12, 2000, 1207-1245.
+[^2]: B. Schölkopf, J. Platt, J. Shawe-Taylor, A. J. Smola, and R. C. Williamson. **Estimating the support of a high-dimensional distribution**. *Neural Computation*, 13, 2001, 1443-1471.
+
+---
+
+```{r}
+summary(svm.mod)
+names(svm.mod)
+```
+
+---
+
+### Decision Values
+
+For multiclass classification with `k` levels, `k>2`, `libsvm` uses the *"one-against-one"*-approach, in which $C^k_2$ binary classifiers are trained; the appropriate class is found by a voting scheme.
+
+```{r}
+svm.mod$decision.values
+```
+
+<br>
+
+### Cost vs. Number of support vectors
+
+```{r}
+#| fig-width: 7
+
+cost <- 1:1000
+nSV <- sapply(cost, \(C) svm(Type ~ ., Glass, cost = C)$tot.nSV)
+plot(cost, nSV, xlab = "Cost", ylab = "Number of support vectors", type = 'l')
+```
+
+---
+
+### Parameter Tuning
+
+```{r}
+svm.tune <- tune(svm, Type ~ ., data = training,
+                 kernel = "radial", probability = TRUE,
+                 range = list(cost = 10^seq(0, 2, len = 10), 
+                              gamma = seq(0.1, 1, len = 10)),
+                 tunecontrol = tune.control(cross = 10, nrepeat = 5))
+```
+
+::: {.callout-tip}
+
+### Arguments of `tune.control()`
+
+- `random`: if an integer value is specified, `random` parameter vectors are drawn from the parameter space.
+- `sampling`
+    - `"cross"` (**default**): (Repeated) `cross`(`10`)-fold cross validation.
+    - `"fix"`: Validation set approach. A single split into training/validation set is used, the training set containing a `fix`(`2/3`) part of the supplied data.
+    - `"bootstrap"`: Bootstrap. `nboot`(`10`) training sets of size `boot.size`(`0.9`) are sampled with replacement from the supplied data.
+- `error.fun`: a function returning the error measure to be minimized.
+    - misclassification error for categorical predictions
+    - MSE for numeric predictions.
+    - a custom function with two arguments: a vector of true values and a vector of predicted values.
+
+:::
+
+::: {.callout-note appearance="minimal"}
+
+- See `?plot.tune`
+
+:::
+
+```{r}
+#| layout-ncol: 2
+#| fig-height: 7
+
+plot(svm.tune, transform.x = log10, xlab = "log(Cost)", 
+     color.palette = hcl.colors)
+plot(svm.tune, transform.x = log10, xlab = "log(Cost)",
+     color.palette = \(n) hcl.colors(n, palette = "RdYlBu", rev = TRUE))
+```
+
+:::: {.columns}
+
+::: {.column width="50%"}
+
+```{r}
+summary(svm.tune)
+```
+
+:::
+
+::: {.column width="50%"}
+
+```{r}
+svm.mod.best <- svm.tune$best.model
+svm.mod.best
+```
+
+:::
+
+::::
+
+---
+
+### Prediction
+
+::: {.callout-note appearance="minimal"}
+
+- See `?predict.svm`
+
+:::
+
+```{r}
+predict(svm.mod.best, testing)
+predict(svm.mod.best, testing, decision.values = TRUE)
+predict(svm.mod.best, testing, probability = TRUE)
+```
+
+- Contingency table & Accuracy
+
+```{r}
+pred.svm <- predict(svm.mod.best, testing)
+table(true = testing$Type, pred = pred.svm)
+mean(testing$Type == pred.svm)
+```
+
+## Support Vector Regression (SVR)
+
+- Simulation Data
+
+```{r}
+x <- runif(100)
+y <- log(x) + rnorm(length(x), sd = 0.25)
+df <- data.frame(x = x, y = y)
+newdat <- data.frame(x = seq(min(x), max(x), len = 1000))
+```
+
+- Default Model
+
+```{r}
+svr.mod <- svm(y ~ x, data = df) # type = "eps-regression" by default
+summary(svr.mod)
+```
+
+- Tuned Model
+
+```{r}
+# Use MSE as error measure by default
+svr.tune <- tune(svm, y ~ x, data = df,
+                 kernel = "radial",
+                 range = list(cost = 10^seq(0, 3, len = 10),
+                              epsilon = seq(0.1, 2, len = 10),
+                              gamma = seq(0.1, 2, len = 10)),
+                 tunecontrol = tune.control(cross = 5, nrepeat = 5))
+
+# summary(svr.tune)
+svr.mod.best <- svr.tune$best.model
+```
+
+- Prediction
+
+```{r}
+pred.svr.1 <- predict(svr.mod, newdat)
+pred.svr.2 <- predict(svr.mod.best, newdat)
+```
+
+```{r}
+#| fig-width: 7
+#| code-fold: true
+#| code-summary: "codes for plot"
+
+plot(df, cex = 0.5)
+lines(newdat$x, log(newdat$x), col = 1)
+lines(newdat$x, pred.svr.1, col = 4)
+lines(newdat$x, pred.svr.2, col = 2)
+legend("bottomright", legend = c("Truth", "pred.svr.1", "pred.svr.2"), lty = 1, col = c(1, 4, 2))
+```
+
+## Tips on practical use
+
+Source: [Support Vector Machines: The Interface to `libsvm` in package `e1071`](https://cran.r-project.org/web/packages/e1071/vignettes/svmdoc.pdf) by David Meyer.
+
+![](figures/svm_tips.png){width=70%}

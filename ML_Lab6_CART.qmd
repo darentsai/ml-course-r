@@ -1,0 +1,243 @@
+---
+title: "Statistical and Machine Learning"
+subtitle: "Lab6: Classification and Regression Tree (CART)"
+author: "Tsai, Dai-Rong"
+format:
+  revealjs:
+    theme: default
+    echo: true
+    fig-width: 7
+    smaller: true
+    scrollable: true
+    slide-number: true
+    auto-stretch: false
+    history: false
+    pdf-max-pages-per-slide: 5
+    embed-resources: true
+    preview-links: true
+tbl-cap-location: bottom
+---
+
+## Dataset
+
+```{r echo = FALSE}
+options(digits = 5, width = 100, max.print = 100)
+```
+
+```{css echo = FALSE}
+.reveal table, ul ul li{
+  font-size: smaller;
+}
+```
+
+> ***Sales of Child Car Seats***
+
+A simulated data set containing sales of child car seats at 400 different stores.
+
+```{r}
+# Set random seed
+set.seed(123)
+
+# Packages
+library(rpart) # for rpart
+library(rpart.plot) # for rpart.plot
+
+# Data
+data(Carseats, package = "ISLR")
+Carseats <- transform(Carseats, High = factor(ifelse(Sales <= 8, "No", "Yes")))
+```
+
+- Response
+    - `Sales` (continuous): Unit sales (in thousands) at each location
+    - `High` (categorical): A factor with levels `No` and `Yes` to indicate whether the `Sales` variable exceeds 8
+- Predictors
+    - `CompPrice`: Price charged by competitor at each location
+    - `Income`: Community income level (in thousands of dollars)
+    - `Advertising`: Local advertising budget for company at each location (in thousands of dollars)
+    - `Population`: Population size in region (in thousands)
+    - `Price`: Price company charges for car seats at each site
+    - `ShelveLoc`: A factor with levels `Bad`, `Good` and `Medium` indicating the quality of the shelving location for the car seats at each site
+    - `Age`: Average age of the local population
+    - `Education`: Education level at each location
+    - `Urban`: A factor with levels `No` and `Yes` to indicate whether the store is in an urban or rural location
+    - `US`: A factor with levels `No` and `Yes` to indicate whether the store is in the US or not
+
+---
+
+::: {.panel-tabset}
+
+### Preview
+
+```{r}
+dim(Carseats)
+head(Carseats)
+table(Carseats$High)
+hist(Carseats$Sales, 30); abline(v = 8, col = 2, lwd = 3)
+```
+
+### Data Structure
+
+```{r}
+str(Carseats)
+```
+
+:::
+
+## Create Training/Testing Partitions
+
+- Split data into 70% training set and 30% test set
+
+```{r}
+nr <- nrow(Carseats)
+train.id <- sample(nr, nr * 0.7)
+
+training <- Carseats[train.id, ]
+testing <- Carseats[-train.id, ]
+```
+
+- Check dimension
+
+```{r}
+dim(training)
+dim(testing)
+```
+
+## Classification Tree
+
+Source: [An Introduction to Recursive Partitioning Using the `rpart` Routines](https://cran.r-project.org/web/packages/rpart/vignettes/longintro.pdf)
+
+```{r}
+ctree.mod <- rpart(High ~ . - Sales, data = training, method = "class",
+                   control = rpart.control(cp = 0.001))
+```
+
+::: {.callout-tip}
+
+### Arguments
+
+- `method`: the type of splitting rule to use.
+    - `"class"` default when `y` is a factor.
+    - `"anova"` default when `y` is numeric.
+    -  `"exp"`: default when `y` is a survival object.
+    - `"poisson"`: default when `y` has 2 columns.
+- `parms = list(...)`: a list of method specific optional parameters. For classification, the list can contain any of:
+    - `prior`: the vector of prior probabilities which must be positive and sum to 1.
+    - `loss`: the loss matrix with zeros on the diagonal and positive off-diagonal elements.
+    - `split`: the splitting index, `"gini"` or `"information"`(cross-entropy).
+- `control = rpart.control(...)`: a list of options that control details of the `rpart` algorithm.
+    - `cp`: (default: 0.01) the scaled cost-complexity parameter. Any split that does not decrease the overall lack-of-fit by a factor of `cp` is not attempted.
+      $$ \begin{aligned} R_\alpha(T) &= R(T) + \alpha \cdot |T| \\
+         \xrightarrow{cp = \frac{\alpha}{R(T_1)}} R_{cp}(T) &= R(T) + cp \cdot R(T_1) \cdot |T|            \end{aligned} $$
+      
+      where $T_1$ is the tree with no splits, $|T|$ is the number of splits for a tree $T$, and $R(\cdot)$ is the risk.
+        - `cp = 0`: **full** model
+        - `cp = 1`: **null** model / model with no splits
+    - `minsplit`: (default: 20) the minimum number of observations that must exist in a node in order for a split to be attempted. This parameter can save computation time, since smaller nodes are almost always pruned away by cross-validation.
+    - `maxdepth`: (default: 30) the maximum depth of the tree, with the root node counted as depth 0.
+    - `xval`: (default: 10) the number of cross-validations.
+
+:::
+
+---
+
+```{r}
+#| layout-ncol: 2
+#| fig-height: 7
+
+rpart.plot(ctree.mod)
+rpart.plot(ctree.mod, extra = 2, box.palette = "BuOr", shadow.col = "gray", fallen.leaves = FALSE)
+```
+
+---
+
+### Variable Importance
+
+```{r}
+ctree.mod$variable.importance
+barplot(rev(ctree.mod$variable.importance), horiz = TRUE, las = 1,
+        cex.names = 0.7, col = "skyblue")
+```
+
+---
+
+### Tree Pruning
+
+```{r}
+printcp(ctree.mod)
+plotcp(ctree.mod)
+```
+
+- Horizontal line: 1SE above the minimum of the curve.
+- A good choice of `cp` for pruning is often the leftmost value for which the mean lies below the horizontal line.
+
+```{r}
+bestcp <- ctree.mod$cptable[which.min(ctree.mod$cptable[, "xerror"]), "CP"]
+bestcp
+```
+
+---
+
+```{r}
+ctree.mod.pruned <- prune(ctree.mod, cp = bestcp)
+rpart.plot(ctree.mod.pruned, box.palette = "BuOr", shadow.col = "gray")
+```
+
+---
+
+### Prediction
+
+::: {.callout-note appearance="minimal"}
+
+- See `?predict.rpart`
+- `type`: "vector", "prob", "class", "matrix"
+
+:::
+
+- Unpruned tree
+
+```{r}
+pred.ctree <- predict(ctree.mod, testing, type = "class")
+table(true = testing$High, pred = pred.ctree)
+# Accuracy
+mean(testing$High == pred.ctree)
+```
+
+- Pruned tree
+
+```{r}
+pred.ctree.pruned <- predict(ctree.mod.pruned, testing, type = "class")
+table(true = testing$High, pred = pred.ctree.pruned)
+# Accuracy
+mean(testing$High == pred.ctree.pruned)
+```
+
+## Regression Tree
+
+```{r}
+regtree.mod <- rpart(Sales ~ . - High, data = training, method = "anova",
+                     control = rpart.control(cp = 0.001))
+printcp(regtree.mod)
+plotcp(regtree.mod)
+
+bestcp <- regtree.mod$cptable[which.min(regtree.mod$cptable[, "xerror"]), "CP"]
+bestcp
+```
+
+---
+
+```{r}
+#| fig-width: 12
+#| fig-height: 5
+
+regtree.mod.pruned <- prune(regtree.mod, cp = bestcp)
+rpart.plot(regtree.mod.pruned)
+```
+
+### Prediction
+
+```{r}
+pred.regtree.pruned <- predict(regtree.mod.pruned, testing)
+
+# MSE
+mean((testing$Sales - pred.regtree.pruned)^2)
+```

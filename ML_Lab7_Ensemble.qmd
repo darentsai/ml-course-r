@@ -1,0 +1,321 @@
+---
+title: "Statistical and Machine Learning"
+subtitle: "Lab7: Ensemble Learning - Bagging and Boosting"
+author: "Tsai, Dai-Rong"
+format:
+  revealjs:
+    theme: default
+    echo: true
+    fig-width: 7
+    smaller: true
+    scrollable: true
+    slide-number: true
+    auto-stretch: false
+    history: false
+    pdf-max-pages-per-slide: 5
+    embed-resources: true
+tbl-cap-location: bottom
+---
+
+## Dataset
+
+```{r echo = FALSE}
+options(digits = 5, width = 100, max.print = 100)
+```
+
+```{css echo = FALSE}
+.reveal table, ul ul li{
+  font-size: smaller;
+}
+```
+
+> ***Sonar, Mines vs. Rocks***
+
+The task is to discriminate between sonar signals bounced off a metal cylinder and those bounced off a roughly cylindrical rock.
+
+```{r}
+# Set random seed
+set.seed(123)
+
+# Packages
+library(randomForest) # for randomForest
+library(adabag) # for boosting
+library(rpart.plot) # for rpart.plot
+library(caTools) # for LogitBoost
+
+# Data
+data(Sonar, package = "mlbench")
+```
+
+- Response
+    - `Class`: `"R"` if the object is a rock and `"M"` if it is a mine (metal cylinder).
+- Predictors
+    - `V1` to `V60`: the energy within a particular frequency band, integrated over a certain period of time.
+
+---
+
+::: {.panel-tabset}
+
+### Preview
+
+```{r}
+dim(Sonar)
+```
+
+```{r}
+#| layout-ncol: 2
+
+head(Sonar)[c(1:5)]
+head(Sonar)[c(56:61)]
+```
+
+```{r}
+table(Sonar$Class)
+```
+
+### Data Structure
+
+```{r}
+str(Sonar)
+```
+
+:::
+
+## Create Training/Testing Partitions
+
+- Split data into 70% training set and 30% test set
+
+```{r}
+nr <- nrow(Sonar)
+train.id <- sample(nr, nr * 0.7)
+
+training <- Sonar[train.id, ]
+testing <- Sonar[-train.id, ]
+```
+
+- Check dimension
+
+```{r}
+dim(training)
+dim(testing)
+```
+
+# Bagging: <br> Bootstrap Aggregating
+
+## Bagging for CART
+
+Bagging for CART is simply a special case of a random forest with $m = p$.
+ 
+```{r}
+bag.tree <- randomForest(Class ~ ., data = training,
+                         mtry = ncol(training)-1,
+                         importance = TRUE)
+bag.tree
+```
+
+The argument `mtry = ncol(training)-1` indicates that all `r ncol(training)-1` predictors should be considered for each split of the tree.
+
+::: {.callout-tip}
+
+### Arguments
+
+- `ntree`: (default: 500) Number of trees to grow.
+- `mtry`: Number of variables randomly sampled as candidates at each split. The default values are different for classification ($\sqrt{p}$ where $p$ is number of predictors) and regression ($\frac{p}{3}$).
+- `nodesize`: Minimum size of terminal nodes. The default value is `1` for classification and `5` for regression.
+- `importance`: Whether importance of predictors is assessed.
+
+:::
+
+## Random Forest
+
+```{r}
+rf <- randomForest(Class ~ ., data = training,
+                   mtry = floor(sqrt(ncol(training)-1)), # default for classification
+                   importance = TRUE)
+rf
+```
+
+```{r}
+plot(rf, lty = 1, main = "OOB Error for Bagging")
+legend("topright", colnames(rf$err.rate), col = 1:3, lty = 1)
+```
+
+---
+
+### Tune `randomForest` for the optimal `mtry` parameter
+
+::: {.callout-tip}
+
+### Arguments
+
+- `mtryStart`: starting value of `mtry`; default is the same as in `randomForest()`.
+- `ntreeTry`: number of trees used at the tuning step.
+- `stepFactor`: at each iteration, `mtry` is inflated (or deflated) by this value.
+- `improve`: the (relative) improvement in OOB error must be by this much for the search to continue.
+
+:::
+
+```{r}
+mtry.tuned <- tuneRF(x = training[, -61], y = training[, 61], 
+                     ntreeTry = 200, stepFactor = 1.5, improve = 0.01)
+mtry.tuned
+```
+
+```{r}
+rf.tuned <- randomForest(Class ~ ., data = training,
+                         mtry = mtry.tuned[which.min(mtry.tuned[, 2]), 1],
+                         importance = TRUE)
+```
+
+---
+
+### Variable Importance
+
+::: {.callout-note}
+
+### Definitions
+
+-  **Mean decrease in accuracy**[^1] (`type = 1`)
+
+   The prediction error (error rate for classification, MSE for regression)
+   on the OOB samples is recorded for each tree.
+   Then the same is done after ***permuting each predictor variable***.
+   The difference between the two are then averaged over all trees,
+   and normalized by the standard deviation of the differences.
+
+-  **Mean decrease in node impurity** (`type = 2`)
+
+   Add up the total amount that the node impurity (Gini index for classification, RSS for regression)
+   is decreased due to splits over a given predictor, averaged over all trees.
+
+:::
+
+[^1]: Christoph Molnar. [**Permutation Feature Importance**](https://christophm.github.io/interpretable-ml-book/feature-importance.html#feature-importance). *Interpretable Machine Learning*.
+
+:::: {.columns}
+
+```{r echo = FALSE}
+op <- options(max.print = 10)
+```
+
+::: {.column width="50%"}
+
+```{r}
+importance(rf.tuned, type = 1)
+```
+
+:::
+
+::: {.column width="50%"}
+
+```{r}
+importance(rf.tuned, type = 2)
+```
+
+:::
+
+```{r echo = FALSE}
+options(op)
+```
+
+::::
+
+```{r}
+varImpPlot(rf)
+```
+
+---
+
+### Comparison bwtween Bagging and Random Forest
+
+```{r}
+oob.err <- cbind(bag = bag.tree$err.rate[, "OOB"], rf = rf.tuned$err.rate[, "OOB"])
+matplot(1:bag.tree$ntree, oob.err,
+        type = 'l', col = c(4, 2), lty = 1, xlab = "Number of Trees", ylab = "Error")
+legend("topright", c("OOB: Bagging", "OOB: Random Forest"), col = c(4, 2), lty = 1)
+```
+
+# Boosting
+
+## AdaBoost: Adaptive Boosting
+
+```{r}
+adabst <- boosting(Class ~ ., data = training, mfinal = 500,
+                   control = rpart.control(maxdepth = 3))
+```
+
+```{r}
+#| layout-ncol: 3
+#| fig-cap: 
+#|   - "Tree 1"
+#|   - "Tree 2"
+#|   - "Tree 500"
+
+rpart.plot(adabst$trees[[1]], roundint = FALSE)
+rpart.plot(adabst$trees[[2]], roundint = FALSE)
+rpart.plot(adabst$trees[[500]], roundint = FALSE)
+```
+
+```{r}
+adabst$weights
+# importanceplot(adabst, horiz = TRUE, cex.names = 0.7)
+vimp10 <- sort(adabst$importance, decreasing = TRUE)[1:10]
+barplot(rev(vimp10), horiz = TRUE, las = 1,
+        cex.names = 0.7, col = "skyblue",
+        main = "Variable relative importance")
+```
+
+```{r}
+evol.train <- errorevol(adabst, newdata = training)
+evol.test <- errorevol(adabst, newdata = testing)
+plot.errorevol(evol.test, evol.train)
+```
+
+## LogitBoost
+
+```{r}
+logitbst <- LogitBoost(xlearn = training[, -61],
+                       ylearn = training[, 61],
+                       nIter = 501)
+```
+
+::: {.callout-note}
+
+`Logitboost` algorithm relies on a voting scheme to make classifications. Many (`nIter` of them) weak classifiers are applied to each sample and their findings are used as votes to make the final classification. It's common for two cases have a tie (the same number of votes), especially if `nIter` is even. In that case `predict()` returns `NA`, instead of a label.
+
+:::
+
+## Gradient Boosting
+
+[![](https://raw.githubusercontent.com/dmlc/dmlc.github.io/master/img/logo-m/xgboost.png){height=100}](https://xgboost.readthedocs.io/en/)
+
+[![](https://raw.githubusercontent.com/microsoft/LightGBM/master/docs/logo/LightGBM_logo_black_text_small.png){height=100}](https://lightgbm.readthedocs.io/en/)
+
+[![](https://raw.githubusercontent.com/catboost/catboost/master/logo/catboost.png){height=200}](https://catboost.ai/en/docs/)
+
+## Prediction
+
+```{r}
+pred.bag.tree <- predict(bag.tree, testing)
+pred.rf.tuned <- predict(rf.tuned, testing)
+pred.adabst <- predict(adabst, testing)$class
+pred.logitbst <- predict(logitbst, testing)
+
+acc <- sapply(mget(ls(pattern = "^pred")), \(x) mean(x == testing$Class))
+```
+
+```{r echo = FALSE}
+names(acc) <- sub("pred.", "", names(acc))
+```
+
+```{r}
+sort(acc)
+```
+
+```{r echo = FALSE}
+#| fig-width: 7
+#| fig-height: 5
+
+barplot(sort(acc), ylim = range(acc) + c(-0.05, 0.05), xpd = FALSE, col = "skyblue",
+        ylab = "Accuracy", main = "Prediction Performance")
+```
